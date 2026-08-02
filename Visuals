@@ -1,0 +1,5 @@
+## Files
+- `FDIC_Bank_Analysis.py` — main analysis script
+- `sd_bank_assets.png` — top 15 SD banks by asset size
+- `sd_bank_roa.png` — ROA comparison vs industry average  
+- `sd_bank_scatter.png` — asset size vs profitability scatter plot
