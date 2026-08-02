@@ -1,0 +1,233 @@
+#########################################################
+# Shimirimana Gerare
+# August 2026
+# South Dakota Bank Financial Analysis
+# FDIC Call Report API (Pubic)
+#########################################################
+import requests
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings('ignore')
+
+print('Libraries loaded successfully')
+
+
+###############################################
+# STEP 1: PULL ALL SOUTH DAKOTA BANKS
+###############################################
+
+url = "https://banks.data.fdic.gov/api/institutions"
+
+params = {
+    "filters": "STALP:SD AND ACTIVE:1",
+    "fields": "ID,NAME,CITY,ASSET,NETINC,ROA,ROE,INTINC,EINTEXP,EQ",
+    "limit": 300,
+    "output": "json"
+}
+
+response = requests.get(url, params=params)
+data = response.json()
+records = data['data']
+
+# Parse nested structure we saw in the raw response
+df = pd.DataFrame([record['data'] for record in records])
+
+print("Status code:", response.status_code)
+print("Number of banks found:", len(df))
+print("\nColumns:", df.columns.tolist())
+print("\nFirst 5 banks:")
+print(df[['NAME', 'CITY', 'ASSET', 'NETINC']].head())
+
+###############################################
+# STEP 2: CLEAN AND PREPARE THE DATA
+###############################################
+
+# Convert columns to numeric
+df['ASSET'] = pd.to_numeric(df['ASSET'], errors='coerce')
+df['NETINC'] = pd.to_numeric(df['NETINC'], errors='coerce')
+df['ROA'] = pd.to_numeric(df['ROA'], errors='coerce')
+df['ROE'] = pd.to_numeric(df['ROE'], errors='coerce')
+df['EQ'] = pd.to_numeric(df['EQ'], errors='coerce')
+
+# Convert from thousands to millions for readability
+df['ASSET_M'] = df['ASSET'] / 1000
+df['NETINC_M'] = df['NETINC'] / 1000
+df['EQ_M'] = df['EQ'] / 1000
+
+# Sort largest to smallest
+df = df.sort_values('ASSET', ascending=False).reset_index(drop=True)
+
+# Categorize by size
+def categorize_bank(asset):
+    if asset >= 1000000:
+        return 'Large (>$1B)'
+    elif asset >= 100000:
+        return 'Mid-Size ($100M-$1B)'
+    else:
+        return 'Community (<$100M)'
+
+df['SIZE_CATEGORY'] = df['ASSET'].apply(categorize_bank)
+
+print("Data cleaned successfully")
+print("\nBank size distribution:")
+print(df['SIZE_CATEGORY'].value_counts())
+print("\nTop 10 South Dakota banks by asset size:")
+print(df[['NAME', 'CITY', 'ASSET_M', 'ROA']].head(10).to_string())
+
+###############################################
+# STEP 3: FIRST VISUALIZATION
+###############################################
+
+# Filter to meaningful SD banks excluding Citi and WF national charters
+sd_banks = df[df['ASSET_M'] < 10000].copy()
+
+fig, ax = plt.subplots(figsize=(12, 7))
+
+colors = ['#1B3A6B' if city == 'Sioux Falls' else '#C9A84C' 
+          for city in sd_banks.head(15)['CITY']]
+
+bars = ax.barh(sd_banks.head(15)['NAME'], 
+               sd_banks.head(15)['ASSET_M'],
+               color=colors)
+
+ax.set_xlabel('Total Assets ($ Millions)', fontsize=12)
+ax.set_title('Top 15 South Dakota Banks by Asset Size\n(Excluding National Charter Banks)', 
+             fontsize=14, fontweight='bold')
+ax.invert_yaxis()
+
+# Add value labels
+for bar, value in zip(bars, sd_banks.head(15)['ASSET_M']):
+    ax.text(bar.get_width() + 50, bar.get_y() + bar.get_height()/2,
+            f'${value:,.0f}M', va='center', fontsize=9)
+
+# Add legend
+from matplotlib.patches import Patch
+legend_elements = [Patch(facecolor='#1B3A6B', label='Sioux Falls'),
+                   Patch(facecolor='#C9A84C', label='Other SD Cities')]
+ax.legend(handles=legend_elements, loc='lower right')
+
+plt.tight_layout()
+plt.savefig('sd_bank_assets.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+print("Chart saved successfully")
+
+###############################################
+# STEP 4: ROA COMPARISON CHART
+###############################################
+
+# Filter same banks and remove any with missing ROA
+roa_df = sd_banks.head(15).dropna(subset=['ROA']).copy()
+
+fig, ax = plt.subplots(figsize=(12, 7))
+
+# Color bars by performance
+colors = ['#1B3A6B' if roa > 1.0 else '#C9A84C' 
+          for roa in roa_df['ROA']]
+
+bars = ax.barh(roa_df['NAME'], roa_df['ROA'], color=colors)
+
+# Add industry average line
+ax.axvline(x=1.26, color='red', linestyle='--', 
+           linewidth=2, label='Industry Avg ROA (Q1 2026: 1.26%)')
+
+ax.set_xlabel('Return on Assets (%)', fontsize=12)
+ax.set_title('Return on Assets — Top 15 South Dakota Banks\nvs. National Industry Average', 
+             fontsize=14, fontweight='bold')
+ax.invert_yaxis()
+
+# Add value labels
+for bar, value in zip(bars, roa_df['ROA']):
+    ax.text(bar.get_width() + 0.02, bar.get_y() + bar.get_height()/2,
+            f'{value:.2f}%', va='center', fontsize=9)
+
+ax.legend(fontsize=10)
+plt.tight_layout()
+plt.savefig('sd_bank_roa.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+print("ROA chart saved")
+
+###############################################
+# STEP 5: SIZE VS PERFORMANCE SCATTER PLOT
+###############################################
+
+fig, ax = plt.subplots(figsize=(12, 8))
+
+# Plot each bank as a dot
+scatter = ax.scatter(sd_banks['ASSET_M'], 
+                     sd_banks['ROA'],
+                     c=['#1B3A6B' if city == 'Sioux Falls' 
+                        else '#C9A84C' for city in sd_banks['CITY']],
+                     s=100, alpha=0.7, edgecolors='white', linewidth=0.5)
+
+# Add industry average lines
+ax.axhline(y=1.26, color='red', linestyle='--', 
+           linewidth=1.5, label='Industry Avg ROA (1.26%)', alpha=0.8)
+
+# Label key banks
+key_banks = ['Pathward, National Association', 
+             'The Bancorp Bank, National Association',
+             'First PREMIER Bank',
+             'Plains Commerce Bank',
+             'American Bank & Trust']
+
+for _, row in sd_banks[sd_banks['NAME'].isin(key_banks)].iterrows():
+    ax.annotate(row['NAME'].replace(', National Association', ''),
+                xy=(row['ASSET_M'], row['ROA']),
+                xytext=(10, 5), textcoords='offset points',
+                fontsize=8, color='#1B3A6B', fontweight='bold')
+
+ax.set_xlabel('Total Assets ($ Millions)', fontsize=12)
+ax.set_ylabel('Return on Assets (%)', fontsize=12)
+ax.set_title('South Dakota Banks — Asset Size vs. Profitability\n(ROA vs Total Assets)', 
+             fontsize=14, fontweight='bold')
+
+from matplotlib.patches import Patch
+legend_elements = [Patch(facecolor='#1B3A6B', label='Sioux Falls'),
+                   Patch(facecolor='#C9A84C', label='Other SD Cities'),
+                   plt.Line2D([0], [0], color='red', linestyle='--', 
+                              label='Industry Avg ROA (1.26%)')]
+ax.legend(handles=legend_elements, loc='upper right')
+
+plt.tight_layout()
+plt.savefig('sd_bank_scatter.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+print("Scatter plot saved")
+
+###############################################
+# STEP 6: SUMMARY STATISTICS & KEY FINDINGS
+###############################################
+
+print("=" * 60)
+print("SOUTH DAKOTA BANKING MARKET — KEY FINDINGS")
+print("=" * 60)
+
+print(f"\nTotal active SD banks analyzed: {len(df)}")
+print(f"\nBank size distribution:")
+print(df['SIZE_CATEGORY'].value_counts().to_string())
+
+print(f"\nTop 5 banks by ROA:")
+print(df.nlargest(5, 'ROA')[['NAME', 'CITY', 'ASSET_M', 'ROA']].to_string())
+
+print(f"\nTop 5 banks by asset size (excl. national charters):")
+print(sd_banks.head(5)[['NAME', 'CITY', 'ASSET_M', 'ROA']].to_string())
+
+print(f"\nSioux Falls banks vs rest of SD:")
+sf_banks = df[df['CITY'] == 'Sioux Falls']
+other_banks = df[df['CITY'] != 'Sioux Falls']
+print(f"Sioux Falls — Avg ROA: {sf_banks['ROA'].mean():.2f}% | "
+      f"Total Assets: ${sf_banks['ASSET_M'].sum():,.0f}M")
+print(f"Other SD Cities — Avg ROA: {other_banks['ROA'].mean():.2f}% | "
+      f"Total Assets: ${other_banks['ASSET_M'].sum():,.0f}M")
+
+print(f"\nPlains Commerce Bank specifically:")
+pcb = df[df['NAME'].str.contains('Plains Commerce', na=False)]
+if len(pcb) > 0:
+    print(pcb[['NAME', 'CITY', 'ASSET_M', 'ROA', 'NETINC_M']].to_string())
+
+print("\nAnalysis complete. Charts saved to working directory.")
+print("Files: sd_bank_assets.png, sd_bank_roa.png, sd_bank_scatter.png")
